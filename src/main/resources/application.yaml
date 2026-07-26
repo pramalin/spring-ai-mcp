@@ -1,0 +1,58 @@
+spring:
+  application:
+    name: spring-ai-goose-files-mcp
+
+  ai:
+    mcp:
+      server:
+        enabled: true
+        name: alai-filesystem-mcp
+        version: 0.2.0
+        type: SYNC
+        protocol: STREAMABLE
+        instructions: >-
+          Read-only tools for inspecting the directory mounted as the workspace.
+          All paths are relative to that root. Use workspace_summary for total counts,
+          list_files or find_files to locate entries, and read_text_file for bounded UTF-8 content.
+        annotation-scanner:
+          enabled: true
+        capabilities:
+          tool: true
+          resource: false
+          prompt: false
+          completion: false
+        resource-change-notification: false
+        prompt-change-notification: false
+        tool-change-notification: false
+        request-timeout: 30s
+        streamable-http:
+          mcp-endpoint: /mcp
+          disallow-delete: true
+
+app:
+  workspace:
+    # Local Maven runs use the sample directory. Compose overrides this with /workspace.
+    root: ${APP_WORKSPACE_ROOT:./sample-files}
+    default-max-results: ${APP_WORKSPACE_DEFAULT_MAX_RESULTS:100}
+    max-results-limit: ${APP_WORKSPACE_MAX_RESULTS_LIMIT:500}
+    default-max-characters: ${APP_WORKSPACE_DEFAULT_MAX_CHARACTERS:12000}
+    max-characters-limit: ${APP_WORKSPACE_MAX_CHARACTERS_LIMIT:50000}
+    max-readable-file-bytes: ${APP_WORKSPACE_MAX_READABLE_FILE_BYTES:2000000}
+
+server:
+  port: 8080
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+logging:
+  level:
+    org.springframework.ai.mcp: INFO

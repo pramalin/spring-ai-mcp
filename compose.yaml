@@ -1,0 +1,77 @@
+name: spring-ai-goose-files-mcp
+
+x-goose-common: &goose-common
+  build:
+    context: ./goose
+  image: spring-ai-goose-cli:local
+  profiles: ["cli"]
+  stdin_open: true
+  tty: true
+  environment:
+    GOOSE_PROVIDER: openai
+    GOOSE_MODE: auto
+    GOOSE_DISABLE_SESSION_NAMING: "true"
+    OPENAI_API_KEY: not-needed
+  models:
+    local-llm:
+      endpoint_var: MODEL_RUNNER_URL
+      model_var: GOOSE_MODEL
+  volumes:
+    - goose-data:/root/.config/goose
+
+services:
+  spring-ai-mcp-server:
+    build:
+      context: .
+    image: spring-ai-goose-files-mcp:local
+    ports:
+      - "${SPRING_APP_PORT:-8080}:8080"
+    environment:
+      APP_WORKSPACE_ROOT: /workspace
+      APP_WORKSPACE_DEFAULT_MAX_RESULTS: ${APP_WORKSPACE_DEFAULT_MAX_RESULTS:-100}
+      APP_WORKSPACE_MAX_RESULTS_LIMIT: ${APP_WORKSPACE_MAX_RESULTS_LIMIT:-500}
+      APP_WORKSPACE_DEFAULT_MAX_CHARACTERS: ${APP_WORKSPACE_DEFAULT_MAX_CHARACTERS:-12000}
+      APP_WORKSPACE_MAX_CHARACTERS_LIMIT: ${APP_WORKSPACE_MAX_CHARACTERS_LIMIT:-50000}
+      APP_WORKSPACE_MAX_READABLE_FILE_BYTES: ${APP_WORKSPACE_MAX_READABLE_FILE_BYTES:-2000000}
+    volumes:
+      - type: bind
+        source: ${FILES_HOST_DIR:-./sample-files}
+        target: /workspace
+        read_only: true
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/actuator/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 15s
+    restart: unless-stopped
+
+  # Minimal terminal chat with no MCP tools. Use this first to validate the model.
+  goose-chat:
+    <<: *goose-common
+    command: ["session"]
+
+  # Terminal chat connected to the Spring Streamable HTTP MCP endpoint.
+  goose-mcp:
+    <<: *goose-common
+    depends_on:
+      spring-ai-mcp-server:
+        condition: service_healthy
+    command:
+      - session
+      - --with-streamable-http-extension
+      - http://spring-ai-mcp-server:8080/mcp
+
+models:
+  local-llm:
+    # Lightweight, Docker-verified model with explicit tool-calling support.
+    # Override LLM_MODEL in .env to try Bonsai or another DMR model.
+    model: ${LLM_MODEL:-ai/qwen2.5:3B-Q4_K_M}
+    # Keep this a literal YAML integer; interpolation may be validated as a string.
+    context_size: 8192
+    runtime_flags:
+      - "--temp"
+      - "0.2"
+
+volumes:
+  goose-data:
