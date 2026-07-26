@@ -1,8 +1,8 @@
 #!/usr/bin/env sh
 set -eu
 
-# Compose injects MODEL_RUNNER_URL and GOOSE_MODEL from the service's model binding.
-# Goose expects the endpoint split into an origin and a chat-completions base path.
+# Docker Model Runner compatibility remains available when MODEL_RUNNER_URL is
+# provided, but LLMSim supplies OPENAI_HOST and OPENAI_BASE_PATH directly.
 if [ -n "${MODEL_RUNNER_URL:-}" ]; then
   endpoint="${MODEL_RUNNER_URL%/}"
   origin=$(printf '%s' "$endpoint" | sed -E 's#^(https?://[^/]+).*$#\1#')
@@ -17,7 +17,15 @@ fi
 export OPENAI_API_KEY
 
 if [ -z "${GOOSE_MODEL:-}" ]; then
-  echo "GOOSE_MODEL was not injected by Docker Compose." >&2
+  echo "GOOSE_MODEL is required." >&2
+  exit 1
+fi
+if [ -z "${OPENAI_HOST:-}" ]; then
+  echo "OPENAI_HOST or MODEL_RUNNER_URL is required." >&2
+  exit 1
+fi
+if [ -z "${OPENAI_BASE_PATH:-}" ]; then
+  echo "OPENAI_BASE_PATH or MODEL_RUNNER_URL is required." >&2
   exit 1
 fi
 

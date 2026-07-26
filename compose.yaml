@@ -1,29 +1,10 @@
-name: spring-ai-goose-files-mcp
-
-x-goose-common: &goose-common
-  build:
-    context: ./goose
-  image: spring-ai-goose-cli:local
-  profiles: ["cli"]
-  stdin_open: true
-  tty: true
-  environment:
-    GOOSE_PROVIDER: openai
-    GOOSE_MODE: auto
-    GOOSE_DISABLE_SESSION_NAMING: "true"
-    OPENAI_API_KEY: not-needed
-  models:
-    local-llm:
-      endpoint_var: MODEL_RUNNER_URL
-      model_var: GOOSE_MODEL
-  volumes:
-    - goose-data:/root/.config/goose
+name: spring-ai-mcp
 
 services:
   spring-ai-mcp-server:
     build:
       context: .
-    image: spring-ai-goose-files-mcp:local
+    image: spring-ai-mcp-server:local
     ports:
       - "${SPRING_APP_PORT:-8080}:8080"
     environment:
@@ -40,38 +21,71 @@ services:
         read_only: true
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/actuator/health"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
+      interval: 3s
+      timeout: 2s
+      retries: 30
       start_period: 15s
     restart: unless-stopped
 
-  # Minimal terminal chat with no MCP tools. Use this first to validate the model.
-  goose-chat:
-    <<: *goose-common
-    command: ["session"]
+  # Deterministic OpenAI/Anthropic simulator built from pramalin/llmsim v0.10.1.
+  # Its browser console is served by this same service at /_llmsim/console.
+  llmsim:
+    build:
+      context: ./llmsim
+      args:
+        LLMSIM_VERSION: ${LLMSIM_VERSION:-0.10.1}
+    image: spring-ai-mcp-llmsim:${LLMSIM_VERSION:-0.10.1}
+    profiles: ["sim"]
+    ports:
+      - "${LLMSIM_PORT:-8089}:8089"
+    environment:
+      LLMSIM_SCRIPT: com.alaiengineering.filesmcp.llmsim.WorkspaceSummaryFlow
+      LLMSIM_PORT: 8089
+      LLMSIM_JOURNAL_MAX_ENTRIES: ${LLMSIM_JOURNAL_MAX_ENTRIES:-1000}
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8089/_llmsim/status"]
+      interval: 2s
+      timeout: 2s
+      retries: 45
+      start_period: 5s
+    restart: unless-stopped
 
-  # Terminal chat connected to the Spring Streamable HTTP MCP endpoint.
-  goose-mcp:
-    <<: *goose-common
-    depends_on:
-      spring-ai-mcp-server:
-        condition: service_healthy
-    command:
-      - session
-      - --with-streamable-http-extension
-      - http://spring-ai-mcp-server:8080/mcp
+  maven-test:
+    image: maven:3.9-eclipse-temurin-21
+    profiles: ["test"]
+    working_dir: /workspace
+    command: ["mvn", "-B", "test"]
+    volumes:
+      - .:/workspace
+      - maven-cache:/root/.m2
 
-models:
-  local-llm:
-    # Lightweight, Docker-verified model with explicit tool-calling support.
-    # Override LLM_MODEL in .env to try Bonsai or another DMR model.
-    model: ${LLM_MODEL:-ai/qwen2.5:3B-Q4_K_M}
-    # Keep this a literal YAML integer; interpolation may be validated as a string.
-    context_size: 8192
-    runtime_flags:
-      - "--temp"
-      - "0.2"
+  mcp-smoke-test:
+    build:
+      context: ./test-harness
+    image: spring-ai-mcp-test-harness:local
+    profiles: ["test"]
+    environment:
+      MCP_URL: http://spring-ai-mcp-server:8080/mcp
+      EXPECTED_FILE_COUNT: ${EXPECTED_FILE_COUNT:-3}
+      EXPECTED_DIRECTORY_COUNT: ${EXPECTED_DIRECTORY_COUNT:-2}
+    command: ["python", "-m", "harness.mcp_smoke"]
+
+  agent-sim-test:
+    build:
+      context: ./test-harness
+    image: spring-ai-mcp-test-harness:local
+    profiles: ["test"]
+    environment:
+      MCP_URL: http://spring-ai-mcp-server:8080/mcp
+      LLMSIM_BASE_URL: http://llmsim:8089/v1
+      LLMSIM_STATUS_URL: http://llmsim:8089/_llmsim/status
+      LLMSIM_CALLS_URL: http://llmsim:8089/_llmsim/calls
+      LLMSIM_RESET_URL: http://llmsim:8089/_llmsim/reset
+      LLMSIM_DASHBOARD_URL: http://llmsim:8089/_llmsim/dashboard
+      LLMSIM_MODEL: ${LLMSIM_MODEL:-gpt-4o-mini}
+      EXPECTED_FILE_COUNT: ${EXPECTED_FILE_COUNT:-3}
+      EXPECTED_DIRECTORY_COUNT: ${EXPECTED_DIRECTORY_COUNT:-2}
+    command: ["python", "-m", "harness.agent_scenario"]
 
 volumes:
-  goose-data:
+  maven-cache:

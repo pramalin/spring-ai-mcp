@@ -1,289 +1,358 @@
-# Spring AI Files MCP + Goose + Docker Model Runner
+# Spring AI MCP server development and testing example
 
-A Docker Compose lab for testing a local tool-capable LLM against a Spring AI MCP server.
+This repository is a small example for developing and testing a Spring AI MCP
+server without requiring a real LLM for every test.
 
-The stack has three independent pieces:
+It deliberately separates two concerns:
+
+- **Deterministic verification:** `pramalin/llmsim` v0.10.1 supplies scripted
+  OpenAI-compatible model responses, captured-call inspection, and a browser
+  console.
+- **Real-model acceptance:** Goose and Docker Model Runner exercise the same MCP
+  server with a local model after the deterministic tests pass.
+
+Open WebUI is intentionally not included.
+
+## Architecture
 
 ```text
-Goose terminal chat ──> Docker Model Runner ──> local LLM
-         |
-         └── Streamable HTTP MCP ──> Spring Boot ──> read-only mounted directory
+Deterministic lane
+
+Python test harness ──OpenAI HTTP──> LLMSim WorkspaceSummaryFlow
+        │                              │
+        │                              └── captured-call journal + console
+        │
+        └──MCP Streamable HTTP────> Spring MCP server ──> mounted files
+
+Real-model lane
+
+Goose CLI ──OpenAI-compatible HTTP──> Docker Model Runner ──> local model
+    │
+    └──MCP Streamable HTTP──────────> Spring MCP server ──> mounted files
 ```
 
-## What the Spring application does
+The Spring application does not own or call an LLM. It only implements tool
+logic and exposes the tools through MCP. The deterministic harness acts as the
+agent host: it asks LLMSim for the next model response, executes requested MCP
+tools, and sends the real tool result back to LLMSim.
 
-The Spring Boot application does **not** call the LLM. It is a model-independent MCP server.
+## Filesystem MCP tools
 
-It exposes Streamable HTTP MCP at:
-
-```text
-http://spring-ai-mcp-server:8080/mcp
-```
-
-It offers six read-only filesystem tools:
+The server exposes these read-only tools at `http://localhost:8080/mcp`:
 
 | Tool | Purpose |
 |---|---|
-| `workspace_summary` | Count all files/directories and group files by extension |
-| `count_files` | Count entries below a selected relative directory |
+| `workspace_summary` | Count the complete mounted workspace and group files by extension |
+| `count_files` | Count entries below a relative directory |
 | `list_files` | Return a bounded directory listing |
-| `find_files` | Search entry names by case-insensitive text |
-| `file_metadata` | Return type, size, extension, and modification time |
-| `read_text_file` | Read a bounded amount of a UTF-8 text file |
+| `find_files` | Search names using a case-insensitive fragment |
+| `file_metadata` | Inspect one relative path |
+| `read_text_file` | Read bounded UTF-8 text |
 
-The host directory is mounted read-only at `/workspace`. The service rejects absolute paths, traversal using `..`, escaping symbolic links, binary files, and excessive result sizes.
+Compose mounts `${FILES_HOST_DIR}` at `/workspace` read-only. The Java service
+rejects absolute paths, traversal, symlinks escaping the root, binary reads,
+oversized reads, and excessively large listings.
 
-## Default model
-
-The default is:
+## Repository layout
 
 ```text
-ai/qwen2.5:3B-Q4_K_M
+compose.yaml                  Spring MCP, LLMSim, and deterministic test services
+compose.local.yaml            Optional Goose + Docker Model Runner overlay
+src/main                      Spring MCP server
+src/test                      Java service tests
+llmsim/Dockerfile             Extends ghcr.io/pramalin/llmsim-build:0.10.1
+llmsim/WorkspaceSummaryFlow.scala
+                              Project-owned deterministic model script
+test-harness/                 MCP client and two-turn agent-loop assertions
+goose/                        Containerized Goose CLI
+scripts/                      Development workflows
+docs/                         Architecture and extension notes
+sample-files/                 Mounted test fixture
+.github/workflows/ci.yml      Deterministic CI workflow
 ```
 
-It is smaller than Bonsai 8B and is listed by Docker as supporting tool calling. The Compose context size is a literal integer (`8192`) because some Compose versions reject interpolated values for `context_size` as strings.
+## Prerequisites
 
-Bonsai is still available by changing `LLM_MODEL` in `.env`:
+Deterministic tests require:
 
-```dotenv
-LLM_MODEL=hf.co/prism-ml/Bonsai-8B-gguf:Q1_0
-```
+- Docker Engine
+- Docker Compose
+- `curl`
+- access to GitHub Container Registry for the first LLMSim image pull
 
-A model that can chat but cannot produce OpenAI-style tool calls may work with `goose-chat` and fail with `goose-mcp`.
+The optional real-model lane additionally requires:
 
-## Requirements
-
-- Docker Engine or Docker Desktop
 - Docker Compose 2.38 or later
-- Docker Model Runner installed and enabled
-- Enough RAM/VRAM for the selected model
+- Docker Model Runner
+- enough RAM for the selected local model
 
-Verify the environment:
-
-```bash
-./scripts/verify-environment.sh
-```
+No host Java, Maven, Python, Scala, sbt, Node, Goose, or LLMSim installation is
+required.
 
 ## Initial setup
 
 ```bash
 cp .env.example .env
+./scripts/verify-environment.sh
 ```
 
-The default mounted directory is the included `sample-files` folder. To expose a different safe directory, edit `.env`:
+The bundled fixture contains three files and two directories. To inspect a
+different safe directory, edit `.env`:
 
 ```dotenv
 FILES_HOST_DIR=/home/pramalin/some-test-directory
 ```
 
-Do not mount your entire home directory during initial testing.
+Avoid mounting your complete home directory for a test project.
 
-Validate the Compose model before building:
+## Test layers
+
+### 1. Java logic tests
 
 ```bash
-docker compose config
+./scripts/test-unit.sh
+# or
+make unit
 ```
 
-## Test 1: plain terminal chat, without MCP
+These tests create temporary directories and verify counting, searching,
+bounded text reads, and traversal rejection without Spring, MCP, LLMSim, or an
+LLM.
 
-This is the first test. It answers whether the model, Docker Model Runner, and Goose can communicate without any MCP tool descriptions.
+### 2. Direct MCP protocol test
 
 ```bash
-./scripts/chat.sh
+./scripts/test-mcp.sh
+# or
+make mcp
 ```
 
-Equivalent command:
+A Python MCP client initializes a Streamable HTTP session, discovers all six
+tools, invokes `workspace_summary`, and checks the mounted fixture counts.
+
+### 3. Deterministic LLMSim agent-loop test
 
 ```bash
-docker compose --profile cli run --rm goose-chat
+./scripts/test-sim.sh
+# or
+make sim
+```
+
+`llmsim/WorkspaceSummaryFlow.scala` has exactly two scripted steps:
+
+1. Return an OpenAI `workspace_summary` tool call.
+2. Build the final response from the real MCP tool result sent back by the
+   harness.
+
+Before the test, the harness calls `POST /_llmsim/reset`. After the two model
+requests, it asserts:
+
+- the expected MCP tool was requested;
+- the real MCP result contains the expected fixture counts;
+- the tool result was included in the second model request;
+- the LLMSim journal contains exactly two successful OpenAI calls;
+- script step indexes are `0` and `1`;
+- the dashboard reports two responded calls and an exhausted exact script.
+
+The test prints the captured call journal before stopping LLMSim.
+
+Run every deterministic layer:
+
+```bash
+./scripts/test-all.sh
+# or
+make test
+```
+
+## LLMSim browser console
+
+Start the MCP server and LLMSim:
+
+```bash
+./scripts/llmsim-console.sh
+# or
+make console
+```
+
+Open:
+
+```text
+http://localhost:8089/_llmsim/console
+```
+
+In another terminal, populate the console with the deterministic scenario:
+
+```bash
+./scripts/test-sim-console.sh
+# or
+make console-test
+```
+
+The console shows the call journal, provider/outcome/streaming/model filters,
+script state, messages, raw request, response outcome, tool-call arguments, and
+headers. The service remains running so the captured calls can be inspected.
+
+A compact JSON view is also available:
+
+```bash
+./scripts/llmsim-stats.sh
+# or
+make stats
+```
+
+That prints:
+
+```text
+GET /_llmsim/dashboard
+GET /_llmsim/calls
+```
+
+Reset both the script and journal without restarting the container:
+
+```bash
+curl -X POST http://localhost:8089/_llmsim/reset
+```
+
+## How the project-specific LLMSim image works
+
+The Dockerfile pins the reusable build image:
+
+```dockerfile
+ARG LLMSIM_VERSION=0.10.1
+FROM ghcr.io/pramalin/llmsim-build:${LLMSIM_VERSION} AS build
+```
+
+It copies only this repository's script into the prepared build environment and
+runs `sbt assembly`. The runtime image contains LLMSim, the custom script, and
+the packaged browser console.
+
+The script belongs to this project rather than to the LLMSim repository:
+
+```scala
+object WorkspaceSummaryFlow extends ScriptSource {
+  val script: Script = Script.exactly(
+    toolCall(
+      id = "workspace-summary-1",
+      name = "workspace_summary",
+      arguments = "{}"
+    ),
+    replyFromToolResult("workspace-summary-1") { result =>
+      s"Workspace inspection completed successfully. MCP tool result: $result"
+    }
+  )
+}
+```
+
+To change the deterministic orchestration, edit
+`llmsim/WorkspaceSummaryFlow.scala`, then rebuild:
+
+```bash
+docker compose --profile sim build llmsim
+```
+
+Keep a script scenario narrow. Each scenario should test one expected agent
+flow or one failure mode.
+
+## Suggested additional LLMSim scenarios
+
+Useful next examples include:
+
+- `find_files` followed by `read_text_file`;
+- malformed tool-call arguments;
+- an unknown MCP tool name;
+- rate-limit or server-error responses;
+- fixed token usage near an application budget boundary;
+- streaming tool-call arguments split across multiple events;
+- delayed streaming and client timeout behavior;
+- script overrun to detect unexpected extra model calls.
+
+Create separate `ScriptSource` objects for these flows and select one with the
+`LLMSIM_SCRIPT` environment variable, or create separate Compose services when
+tests run in parallel.
+
+## 4. Real local-model verification
+
+After deterministic tests pass, start Goose with Docker Model Runner and the
+same MCP endpoint:
+
+```bash
+./scripts/local-mcp.sh
+# or
+make local-mcp
 ```
 
 Try:
 
 ```text
-hi
-```
-
-A noninteractive smoke test is also included:
-
-```bash
-./scripts/smoke-chat.sh
-```
-
-If this fails, do not test MCP yet. Inspect the model and Docker Model Runner first.
-
-## Test 2: terminal chat with the Spring MCP server
-
-```bash
-./scripts/chat-mcp.sh
-```
-
-Equivalent command:
-
-```bash
-docker compose --profile cli run --rm goose-mcp
-```
-
-Compose starts the Spring server, waits for its health check, starts Goose, and connects Goose to:
-
-```text
-http://spring-ai-mcp-server:8080/mcp
-```
-
-Try these prompts:
-
-```text
-What MCP tools are available?
+Use workspace_summary and tell me how many files and directories are mounted.
 ```
 
 ```text
-Use workspace_summary and tell me how many files and directories exist.
+Find files containing project, read the matching text files, and summarize them.
 ```
 
-```text
-List all files recursively, then summarize what is in each text file.
-```
+This lane verifies model reasoning and tool selection, so it is intentionally a
+manual acceptance test rather than a deterministic CI assertion.
 
-Noninteractive MCP smoke test:
+Test the model without MCP:
 
 ```bash
-./scripts/smoke-mcp.sh
+./scripts/local-chat.sh
+# or
+make local-chat
 ```
 
-With the included sample directory, the workspace contains three files and two subdirectories.
+The default model is configured in `.env`:
 
-## Test the Spring service without an LLM
+```dotenv
+LOCAL_LLM_MODEL=ai/qwen2.5:3B-Q4_K_M
+```
 
-Start only the MCP server:
+## Adding an MCP tool
+
+See [`docs/adding-a-tool.md`](docs/adding-a-tool.md). The intended sequence is:
+
+1. Implement domain logic as an ordinary Java service.
+2. Unit-test the service without MCP.
+3. Add a thin MCP tool adapter.
+4. Extend the direct MCP smoke test.
+5. Add a focused LLMSim `ScriptSource` for orchestration behavior.
+6. Assert the LLMSim call journal and application result.
+7. Verify the same flow with a real local model.
+
+## Stopping and cleanup
 
 ```bash
-./scripts/start-mcp-server.sh
+./scripts/down.sh
+# or
+make down
 ```
 
-Then call its ordinary diagnostic endpoint:
+For a stranded one-off Goose container:
 
 ```bash
-./scripts/test-api.sh
+./scripts/force-clean.sh
+# or
+make clean
 ```
 
-Or:
+These commands do not remove Docker Model Runner's downloaded model cache.
 
-```bash
-curl http://localhost:8080/api/workspace/summary
-```
+## Useful endpoints
 
-Application information:
+| Endpoint | Purpose |
+|---|---|
+| `http://localhost:8080/mcp` | Spring MCP Streamable HTTP endpoint |
+| `http://localhost:8080/api/workspace/summary` | Non-MCP diagnostic endpoint |
+| `http://localhost:8089/v1/chat/completions` | LLMSim OpenAI-compatible chat API |
+| `http://localhost:8089/v1/models` | LLMSim model-list compatibility endpoint |
+| `http://localhost:8089/_llmsim/status` | Quick captured-call count |
+| `http://localhost:8089/_llmsim/calls` | Complete captured-call journal |
+| `http://localhost:8089/_llmsim/dashboard` | Aggregated script/journal metrics |
+| `http://localhost:8089/_llmsim/ui` | Minimal dashboard |
+| `http://localhost:8089/_llmsim/console` | Full Tyrian console |
 
-```bash
-curl http://localhost:8080/api/info
-```
+## Project references
 
-These REST endpoints are only diagnostics. MCP clients use `/mcp`.
-
-## How model endpoint injection works
-
-The `local-llm` Compose model is bound to the Goose services using long syntax:
-
-```yaml
-models:
-  local-llm:
-    endpoint_var: MODEL_RUNNER_URL
-    model_var: GOOSE_MODEL
-```
-
-Docker Compose provisions the model and injects its endpoint and model name. The Goose image includes `goose-entrypoint.sh`, which converts the injected endpoint into the two settings required by Goose's OpenAI-compatible provider:
-
-```text
-OPENAI_HOST
-OPENAI_BASE_PATH
-```
-
-This avoids assuming whether the Docker platform exposes Model Runner at a host port or an internal model endpoint.
-
-## Compose services
-
-| Service | Profile | Role |
-|---|---|---|
-| `spring-ai-mcp-server` | default | Spring AI read-only filesystem MCP server |
-| `goose-chat` | `cli` | Minimal terminal chat without MCP |
-| `goose-mcp` | `cli` | Terminal chat connected to Spring MCP |
-
-## Useful commands
-
-Build the two local images:
-
-```bash
-docker compose --profile cli build spring-ai-mcp-server goose-chat
-```
-
-See running services:
-
-```bash
-docker compose ps
-```
-
-See Spring logs:
-
-```bash
-docker compose logs -f spring-ai-mcp-server
-```
-
-Stop services:
-
-Select Bonsai for one command without editing `.env`:
-
-```bash
-LLM_MODEL=hf.co/prism-ml/Bonsai-8B-gguf:Q1_0 \
-  docker compose --profile cli run --rm goose-chat
-```
-
-## Troubleshooting sequence
-
-### `context size exceeded` even for a short message
-
-Run plain chat first:
-
-```bash
-./scripts/chat.sh
-```
-
-If plain chat works and MCP chat fails, the additional agent instructions and MCP schemas exceed the model's practical context or the model is weak at tool calling.
-
-### Plain chat is very slow
-
-Try the default Qwen 2.5 3B model rather than Bonsai. Also check whether Docker Model Runner is using CPU-only inference.
-
-### Spring works but Goose cannot connect to MCP
-
-Check:
-
-```bash
-docker compose ps
-docker compose logs spring-ai-mcp-server
-curl http://localhost:8080/actuator/health
-```
-
-Then rerun:
-
-```bash
-./scripts/chat-mcp.sh
-```
-
-### Goose reports provider configuration errors
-
-Inspect the variables injected into a one-off container:
-
-```bash
-docker compose --profile cli run --rm --entrypoint /bin/sh goose-chat -lc \
-  'env | sort | grep -E "GOOSE|MODEL_RUNNER|OPENAI"'
-```
-
-You should see `GOOSE_MODEL` and `MODEL_RUNNER_URL`. The entrypoint derives `OPENAI_HOST` and `OPENAI_BASE_PATH` at startup.
-
-## Source references
-
-- Docker Compose models: https://docs.docker.com/ai/compose/models-and-compose/
-- Goose providers and Docker Model Runner: https://goose-docs.ai/docs/getting-started/providers/
-- Goose Streamable HTTP extensions: https://goose-docs.ai/docs/getting-started/using-extensions/
-- Goose in Docker: https://goose-docs.ai/docs/tutorials/goose-in-docker/
-- Qwen 2.5 Docker model: https://hub.docker.com/r/ai/qwen2.5
+- LLMSim: `https://github.com/pramalin/llmsim`
+- Spring project: `https://github.com/pramalin/spring-ai-mcp`

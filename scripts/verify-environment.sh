@@ -1,22 +1,17 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/usr/bin/env sh
+set -eu
+. "$(dirname "$0")/common.sh"
 
-required_commands=(docker curl)
-for command_name in "${required_commands[@]}"; do
-  if ! command -v "$command_name" >/dev/null 2>&1; then
-    echo "Missing required command: $command_name" >&2
-    exit 1
-  fi
-done
+docker version --format 'Docker Engine: {{.Server.Version}}'
+docker compose version
+compose config >/dev/null
+echo "PASS: base MCP + LLMSim Compose configuration validates."
+echo "LLMSim release requested: ${LLMSIM_VERSION:-0.10.1}"
+echo "LLMSim console: http://localhost:${LLMSIM_PORT:-8089}/_llmsim/console"
 
-echo "Docker: $(docker --version)"
-echo "Compose: $(docker compose version)"
-
-if docker model version >/dev/null 2>&1; then
-  echo "Docker Model Runner: $(docker model version | head -n 1)"
+if compose -f compose.yaml -f compose.local.yaml config >/dev/null 2>&1; then
+  echo "PASS: optional Docker Model Runner overlay validates."
 else
-  echo "Docker Model Runner is unavailable. Install/enable it before starting the primary Compose stack." >&2
-  exit 1
+  echo "WARN: optional local-model overlay did not validate." >&2
+  echo "      It requires Docker Compose 2.38+ and Docker Model Runner support." >&2
 fi
-
-echo "Environment check completed."

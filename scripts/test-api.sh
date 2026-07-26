@@ -1,12 +1,7 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-base_url="${SPRING_APP_URL:-http://localhost:8080}"
-
-echo "Application information:"
-curl --fail --silent --show-error "${base_url}/api/info"
+#!/usr/bin/env sh
+set -eu
+port="${SPRING_APP_PORT:-8080}"
+curl --fail --silent "http://localhost:${port}/api/info"
 echo
-echo
-echo "Workspace summary:"
-curl --fail --silent --show-error "${base_url}/api/workspace/summary"
+curl --fail --silent "http://localhost:${port}/api/workspace/summary"
 echo

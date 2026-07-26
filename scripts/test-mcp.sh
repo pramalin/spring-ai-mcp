@@ -1,6 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 . "$(dirname "$0")/common.sh"
+
 compose up --build -d spring-ai-mcp-server
 wait_for_health spring-ai-mcp-server
-echo "MCP endpoint: http://localhost:${SPRING_APP_PORT:-8080}/mcp"
+compose --profile test run --rm --build mcp-smoke-test

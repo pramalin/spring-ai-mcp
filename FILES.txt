@@ -1,19 +1,55 @@
-compose.yaml                         Complete Compose stack and CLI profiles
-.env.example                         Model, ports, and mounted-directory settings
-Dockerfile                           Spring Boot MCP server image
-goose/Dockerfile                     Containerized Goose CLI image
-goose/goose-entrypoint.sh            Adapts Compose model endpoint for Goose
-pom.xml                              Spring Boot and Spring AI Maven build
-src/main/...                         Read-only filesystem MCP server implementation
-src/test/...                         Workspace path-safety tests
-sample-files/...                     Small mounted workspace for initial testing
-scripts/chat.sh                      Plain Goose chat without MCP
-scripts/chat-mcp.sh                  Goose chat with Spring MCP enabled
-scripts/smoke-chat.sh                Noninteractive plain-chat smoke test
-scripts/smoke-mcp.sh                 Noninteractive MCP tool-call smoke test
-scripts/start-mcp-server.sh          Start only the Spring MCP server
-scripts/start-open-webui.sh          Start Spring MCP server and optional Open WebUI
-scripts/test-api.sh                  Test the non-MCP diagnostic endpoint
-scripts/verify-environment.sh        Check Docker, Compose, and Model Runner
-scripts/pull-model.sh                Pull the selected model explicitly
-README.md                            Architecture and step-by-step instructions
+.dockerignore
+.env.example
+.github/workflows/ci.yml
+.gitignore
+Dockerfile
+FILES.txt
+Makefile
+README.md
+UPGRADE.md
+compose.local.yaml
+compose.yaml
+docs/adding-a-tool.md
+docs/architecture.md
+docs/llmsim.md
+docs/testing-strategy.md
+goose/Dockerfile
+goose/goose-entrypoint.sh
+llmsim/Dockerfile
+llmsim/WorkspaceSummaryFlow.scala
+pom.xml
+sample-files/README.txt
+sample-files/data/inventory.csv
+sample-files/docs/project-notes.md
+scripts/common.sh
+scripts/down.sh
+scripts/force-clean.sh
+scripts/llmsim-console.sh
+scripts/llmsim-stats.sh
+scripts/local-chat.sh
+scripts/local-mcp.sh
+scripts/start-mcp-server.sh
+scripts/test-all.sh
+scripts/test-api.sh
+scripts/test-mcp.sh
+scripts/test-sim-console.sh
+scripts/test-sim.sh
+scripts/test-unit.sh
+scripts/verify-environment.sh
+src/main/java/com/alaiengineering/filesmcp/SpringAiFilesMcpApplication.java
+src/main/java/com/alaiengineering/filesmcp/api/AppInfoController.java
+src/main/java/com/alaiengineering/filesmcp/config/WorkspaceProperties.java
+src/main/java/com/alaiengineering/filesmcp/filesystem/FileSystemMcpTools.java
+src/main/java/com/alaiengineering/filesmcp/filesystem/WorkspaceFileService.java
+src/main/resources/application.yaml
+src/test/java/com/alaiengineering/filesmcp/filesystem/WorkspaceFileServiceTests.java
+test-harness/Dockerfile
+test-harness/harness/__init__.py
+test-harness/harness/__pycache__/__init__.cpython-313.pyc
+test-harness/harness/__pycache__/agent_scenario.cpython-313.pyc
+test-harness/harness/__pycache__/common.cpython-313.pyc
+test-harness/harness/__pycache__/mcp_smoke.cpython-313.pyc
+test-harness/harness/agent_scenario.py
+test-harness/harness/common.py
+test-harness/harness/mcp_smoke.py
+test-harness/requirements.txt

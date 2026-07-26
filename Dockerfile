@@ -16,7 +16,7 @@ RUN apt-get update \
     && apt-get install --yes --no-install-recommends wget \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=build /workspace/target/spring-ai-goose-files-mcp-*.jar /app/application.jar
+COPY --from=build /workspace/target/spring-ai-mcp-filesystem-example-*.jar /app/application.jar
 
 EXPOSE 8080
 ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75.0", "-jar", "/app/application.jar"]

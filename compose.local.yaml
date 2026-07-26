@@ -1,0 +1,47 @@
+name: spring-ai-mcp
+
+x-goose-common: &goose-common
+  build:
+    context: ./goose
+  image: spring-ai-mcp-goose:local
+  profiles: ["local"]
+  stdin_open: true
+  tty: true
+  environment:
+    GOOSE_PROVIDER: openai
+    GOOSE_MODE: auto
+    GOOSE_DISABLE_SESSION_NAMING: "true"
+    OPENAI_API_KEY: not-needed
+  models:
+    local-llm:
+      endpoint_var: MODEL_RUNNER_URL
+      model_var: GOOSE_MODEL
+  volumes:
+    - goose-data:/root/.config/goose
+
+services:
+  goose-local-chat:
+    <<: *goose-common
+    command: ["session"]
+
+  goose-local-mcp:
+    <<: *goose-common
+    depends_on:
+      spring-ai-mcp-server:
+        condition: service_healthy
+    command:
+      - session
+      - --with-streamable-http-extension
+      - http://spring-ai-mcp-server:8080/mcp
+
+models:
+  local-llm:
+    model: ${LOCAL_LLM_MODEL:-ai/qwen2.5:3B-Q4_K_M}
+    # Literal integer: some Compose versions reject interpolated context sizes.
+    context_size: 8192
+    runtime_flags:
+      - "--temp"
+      - "0.2"
+
+volumes:
+  goose-data:

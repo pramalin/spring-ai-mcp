@@ -1,13 +1,13 @@
 spring:
   application:
-    name: spring-ai-goose-files-mcp
+    name: spring-ai-mcp-filesystem-example
 
   ai:
     mcp:
       server:
         enabled: true
         name: alai-filesystem-mcp
-        version: 0.2.0
+        version: 0.3.0
         type: SYNC
         protocol: STREAMABLE
         instructions: >-
