@@ -1,48 +1,176 @@
-# Spring AI MCP server development and testing example
+# Deterministic Testing for Spring AI MCP Servers
 
-This repository is a small example for developing and testing a Spring AI MCP
-server without requiring a real LLM for every test.
+A reference project for Java and Spring developers who want fast, repeatable
+MCP server tests before involving a real language model.
 
-It deliberately separates two concerns:
+## Why this exists
 
-- **Deterministic verification:** `pramalin/llmsim` v0.10.1 supplies scripted
-  OpenAI-compatible model responses, captured-call inspection, and a browser
-  console.
-- **Real-model acceptance:** Goose and Docker Model Runner exercise the same MCP
-  server with a local model after the deterministic tests pass.
+Testing an MCP server against a real LLM mixes together two different
+questions:
+
+1. **Does the server work correctly?**
+   Are the domain logic, MCP transport, tool schemas, serialization, mounted
+   resources, and agent orchestration correct?
+2. **Can this model use the server correctly?**
+   Can the model understand the prompt, choose the appropriate tool, provide
+   valid arguments, and interpret the result?
+
+A real model is necessary for the second question, but it is a poor foundation
+for routine development and CI tests. Model behavior is non-deterministic,
+inference can be slow and resource-intensive, and exact tool-call sequences are
+difficult to assert reliably.
+
+This project separates those concerns into two lanes:
+
+- **Deterministic development and CI testing:**
+  [LLMSim](https://github.com/pramalin/llmsim) returns scripted
+  OpenAI-compatible responses, including exact tool calls. The test harness
+  executes those calls against the real Spring MCP server and asserts the
+  complete interaction.
+- **Real-model acceptance testing:** Goose and Docker Model Runner exercise the
+  same MCP server with a local tool-capable model after the deterministic tests
+  pass.
+
+The read-only filesystem tools are the **example domain**. The reusable part is
+the testing pattern:
+
+```text
+Java unit tests
+      ↓
+direct MCP protocol tests
+      ↓
+deterministic LLMSim agent-loop tests
+      ↓
+real-model acceptance with Goose
+```
 
 Open WebUI is intentionally not included.
+
+## Who this is for
+
+This repository is intended for Java and Spring developers building MCP servers
+who want:
+
+- CI-safe tests without downloading or running an LLM;
+- exact assertions on tool names, arguments, results, and model-call order;
+- a clear boundary between server correctness and model capability;
+- a small reference project that can be adapted to another domain.
+
+## What each test layer proves
+
+| Layer | What it verifies | Real LLM required |
+|---|---|---:|
+| Java unit tests | Domain logic, validation, and security boundaries | No |
+| Direct MCP test | Tool discovery, schemas, transport, serialization, and invocation | No |
+| LLMSim agent-loop test | Model request, tool call, MCP execution, tool-result return, and final response sequence | No |
+| Goose acceptance test | Prompt understanding, tool selection, arguments, and result interpretation | Yes |
+
+The deterministic tests answer:
+
+> Did we build the MCP server and orchestration correctly?
+
+The Goose test answers:
+
+> Can this model use the server successfully?
+
+## Quick start
+
+### Run all deterministic tests
+
+```bash
+cp .env.example .env
+./scripts/test-all.sh
+# or
+make test
+```
+
+This runs:
+
+1. Java service tests;
+2. a direct MCP Streamable HTTP test;
+3. a deterministic two-turn LLMSim tool-call scenario.
+
+No real LLM is used.
+
+### Inspect the simulated model interaction
+
+Start Spring MCP and LLMSim:
+
+```bash
+./scripts/llmsim-console.sh
+# or
+make console
+```
+
+In another terminal, run the scenario without stopping the services:
+
+```bash
+./scripts/test-sim-console.sh
+# or
+make console-test
+```
+
+Open:
+
+```text
+http://localhost:8089/_llmsim/console
+```
+
+The console shows the captured requests, normalized messages, raw payloads,
+tool-call arguments, script state, outcomes, timing, headers, and filters.
+
+### Verify with a real local model
+
+After the deterministic tests pass:
+
+```bash
+./scripts/local-mcp.sh
+# or
+make local-mcp
+```
+
+Try:
+
+```text
+Use workspace_summary and tell me how many files and directories are mounted.
+```
+
+This is a manual acceptance test. Its result depends on model quality, prompt,
+context size, and available compute.
 
 ## Architecture
 
 ```text
-Deterministic lane
+Deterministic test lane
 
-Python test harness ──OpenAI HTTP──> LLMSim WorkspaceSummaryFlow
+Python test harness ──OpenAI HTTP──> LLMSim scripted response
         │                              │
         │                              └── captured-call journal + console
         │
         └──MCP Streamable HTTP────> Spring MCP server ──> mounted files
 
-Real-model lane
+Real-model acceptance lane
 
 Goose CLI ──OpenAI-compatible HTTP──> Docker Model Runner ──> local model
     │
     └──MCP Streamable HTTP──────────> Spring MCP server ──> mounted files
 ```
 
-The Spring application does not own or call an LLM. It only implements tool
-logic and exposes the tools through MCP. The deterministic harness acts as the
-agent host: it asks LLMSim for the next model response, executes requested MCP
-tools, and sends the real tool result back to LLMSim.
+The Spring application does not own or call an LLM. It implements domain logic
+and exposes tools through MCP. In the deterministic lane, the Python harness is
+the agent host: it asks LLMSim for the next model response, executes requested
+MCP tools, and sends the real tool result back to LLMSim.
 
-## Filesystem MCP tools
+See [`docs/architecture.md`](docs/architecture.md) for the component boundaries
+and design rationale.
 
-The server exposes these read-only tools at `http://localhost:8080/mcp`:
+## Example domain: read-only filesystem tools
+
+The example MCP server exposes six tools at `http://localhost:8080/mcp`:
 
 | Tool | Purpose |
 |---|---|
-| `workspace_summary` | Count the complete mounted workspace and group files by extension |
+| `workspace_summary` | Count the mounted workspace and group files by extension |
 | `count_files` | Count entries below a relative directory |
 | `list_files` | Return a bounded directory listing |
 | `find_files` | Search names using a case-insensitive fragment |
@@ -50,62 +178,51 @@ The server exposes these read-only tools at `http://localhost:8080/mcp`:
 | `read_text_file` | Read bounded UTF-8 text |
 
 Compose mounts `${FILES_HOST_DIR}` at `/workspace` read-only. The Java service
-rejects absolute paths, traversal, symlinks escaping the root, binary reads,
-oversized reads, and excessively large listings.
+rejects absolute paths, traversal, symbolic links escaping the root, binary
+reads, oversized reads, and excessively large listings.
 
-## Repository layout
+The filesystem implementation is deliberately small. Replace it with your own
+domain service while retaining the same testing layers.
+
+## How LLMSim enables deterministic MCP testing
+
+`llmsim/WorkspaceSummaryFlow.scala` defines an exact two-step model scenario:
+
+1. Return an OpenAI tool call for `workspace_summary`.
+2. Build the final response from the real MCP tool result returned by the test
+   harness.
+
+The test therefore exercises the real path:
 
 ```text
-compose.yaml                  Spring MCP, LLMSim, and deterministic test services
-compose.local.yaml            Optional Goose + Docker Model Runner overlay
-src/main                      Spring MCP server
-src/test                      Java service tests
-llmsim/Dockerfile             Extends ghcr.io/pramalin/llmsim-build:0.10.1
-llmsim/WorkspaceSummaryFlow.scala
-                              Project-owned deterministic model script
-test-harness/                 MCP client and two-turn agent-loop assertions
-goose/                        Containerized Goose CLI
-scripts/                      Development workflows
-docs/                         Architecture and extension notes
-sample-files/                 Mounted test fixture
-.github/workflows/ci.yml      Deterministic CI workflow
+model request
+  → scripted tool call
+  → real MCP invocation
+  → real domain result
+  → OpenAI tool-result message
+  → scripted final response
 ```
 
-## Prerequisites
+Before each run, the harness resets LLMSim with:
 
-Deterministic tests require:
-
-- Docker Engine
-- Docker Compose
-- `curl`
-- access to GitHub Container Registry for the first LLMSim image pull
-
-The optional real-model lane additionally requires:
-
-- Docker Compose 2.38 or later
-- Docker Model Runner
-- enough RAM for the selected local model
-
-No host Java, Maven, Python, Scala, sbt, Node, Goose, or LLMSim installation is
-required.
-
-## Initial setup
-
-```bash
-cp .env.example .env
-./scripts/verify-environment.sh
+```text
+POST /_llmsim/reset
 ```
 
-The bundled fixture contains three files and two directories. To inspect a
-different safe directory, edit `.env`:
+After the run, it asserts the call journal and dashboard through:
 
-```dotenv
-FILES_HOST_DIR=/home/pramalin/some-test-directory
+```text
+GET /_llmsim/calls
+GET /_llmsim/dashboard
 ```
 
-Avoid mounting your complete home directory for a test project.
+LLMSim does not execute MCP and does not reason about the prompt. It provides
+controlled model behavior so the application and orchestration can be tested
+without model variability.
 
-## Test layers
+See [`docs/llmsim.md`](docs/llmsim.md) for the custom image and script details.
+
+## Test layers in detail
 
 ### 1. Java logic tests
 
@@ -127,8 +244,8 @@ LLM.
 make mcp
 ```
 
-A Python MCP client initializes a Streamable HTTP session, discovers all six
-tools, invokes `workspace_summary`, and checks the mounted fixture counts.
+A Python MCP client initializes a Streamable HTTP session, discovers the tools,
+invokes `workspace_summary`, and checks the mounted fixture counts.
 
 ### 3. Deterministic LLMSim agent-loop test
 
@@ -138,142 +255,16 @@ tools, invokes `workspace_summary`, and checks the mounted fixture counts.
 make sim
 ```
 
-`llmsim/WorkspaceSummaryFlow.scala` has exactly two scripted steps:
-
-1. Return an OpenAI `workspace_summary` tool call.
-2. Build the final response from the real MCP tool result sent back by the
-   harness.
-
-Before the test, the harness calls `POST /_llmsim/reset`. After the two model
-requests, it asserts:
+The harness asserts:
 
 - the expected MCP tool was requested;
+- the tool arguments are correct;
 - the real MCP result contains the expected fixture counts;
-- the tool result was included in the second model request;
-- the LLMSim journal contains exactly two successful OpenAI calls;
-- script step indexes are `0` and `1`;
-- the dashboard reports two responded calls and an exhausted exact script.
+- the tool result appears in the second model request;
+- LLMSim captured exactly two successful OpenAI calls;
+- the expected script steps were consumed in order.
 
-The test prints the captured call journal before stopping LLMSim.
-
-Run every deterministic layer:
-
-```bash
-./scripts/test-all.sh
-# or
-make test
-```
-
-## LLMSim browser console
-
-Start the MCP server and LLMSim:
-
-```bash
-./scripts/llmsim-console.sh
-# or
-make console
-```
-
-Open:
-
-```text
-http://localhost:8089/_llmsim/console
-```
-
-In another terminal, populate the console with the deterministic scenario:
-
-```bash
-./scripts/test-sim-console.sh
-# or
-make console-test
-```
-
-The console shows the call journal, provider/outcome/streaming/model filters,
-script state, messages, raw request, response outcome, tool-call arguments, and
-headers. The service remains running so the captured calls can be inspected.
-
-A compact JSON view is also available:
-
-```bash
-./scripts/llmsim-stats.sh
-# or
-make stats
-```
-
-That prints:
-
-```text
-GET /_llmsim/dashboard
-GET /_llmsim/calls
-```
-
-Reset both the script and journal without restarting the container:
-
-```bash
-curl -X POST http://localhost:8089/_llmsim/reset
-```
-
-## How the project-specific LLMSim image works
-
-The Dockerfile pins the reusable build image:
-
-```dockerfile
-ARG LLMSIM_VERSION=0.10.1
-FROM ghcr.io/pramalin/llmsim-build:${LLMSIM_VERSION} AS build
-```
-
-It copies only this repository's script into the prepared build environment and
-runs `sbt assembly`. The runtime image contains LLMSim, the custom script, and
-the packaged browser console.
-
-The script belongs to this project rather than to the LLMSim repository:
-
-```scala
-object WorkspaceSummaryFlow extends ScriptSource {
-  val script: Script = Script.exactly(
-    toolCall(
-      id = "workspace-summary-1",
-      name = "workspace_summary",
-      arguments = "{}"
-    ),
-    replyFromToolResult("workspace-summary-1") { result =>
-      s"Workspace inspection completed successfully. MCP tool result: $result"
-    }
-  )
-}
-```
-
-To change the deterministic orchestration, edit
-`llmsim/WorkspaceSummaryFlow.scala`, then rebuild:
-
-```bash
-docker compose --profile sim build llmsim
-```
-
-Keep a script scenario narrow. Each scenario should test one expected agent
-flow or one failure mode.
-
-## Suggested additional LLMSim scenarios
-
-Useful next examples include:
-
-- `find_files` followed by `read_text_file`;
-- malformed tool-call arguments;
-- an unknown MCP tool name;
-- rate-limit or server-error responses;
-- fixed token usage near an application budget boundary;
-- streaming tool-call arguments split across multiple events;
-- delayed streaming and client timeout behavior;
-- script overrun to detect unexpected extra model calls.
-
-Create separate `ScriptSource` objects for these flows and select one with the
-`LLMSIM_SCRIPT` environment variable, or create separate Compose services when
-tests run in parallel.
-
-## 4. Real local-model verification
-
-After deterministic tests pass, start Goose with Docker Model Runner and the
-same MCP endpoint:
+### 4. Real local-model acceptance
 
 ```bash
 ./scripts/local-mcp.sh
@@ -281,44 +272,82 @@ same MCP endpoint:
 make local-mcp
 ```
 
-Try:
+Use this lane to check whether a real model can select and use the tools. Do not
+use its generated wording as a stable CI assertion.
+
+For the complete testing rationale, see
+[`docs/testing-strategy.md`](docs/testing-strategy.md).
+
+## Adapting this pattern to another MCP server
+
+Replace the filesystem service with your domain logic while retaining the test
+sequence:
+
+1. Implement domain behavior in an ordinary Spring service.
+2. Unit-test that service without MCP.
+3. Add a thin `@McpTool` adapter.
+4. Extend the direct MCP test to discover and invoke the tool.
+5. Add a focused LLMSim `ScriptSource` for the expected agent flow.
+6. Assert the captured model calls and the real tool result.
+7. Run final acceptance with a real local model.
+
+Keep each LLMSim scenario narrow: one expected flow or one failure mode. Useful
+additional scenarios include invalid arguments, unknown tools, server failures,
+timeouts, streaming tool arguments, and unexpected extra model calls.
+
+See [`docs/adding-a-tool.md`](docs/adding-a-tool.md) for a practical checklist.
+
+## Repository layout
 
 ```text
-Use workspace_summary and tell me how many files and directories are mounted.
+compose.yaml                  Spring MCP, LLMSim, and deterministic tests
+compose.local.yaml            Optional Goose + Docker Model Runner overlay
+src/main                      Spring MCP server
+src/test                      Java domain-service tests
+llmsim/Dockerfile             Extends pramalin/llmsim-build
+llmsim/WorkspaceSummaryFlow.scala
+                              Project-owned deterministic model script
+test-harness/                 MCP client and agent-loop assertions
+goose/                        Containerized Goose CLI
+scripts/                      Development workflows
+docs/                         Architecture and extension notes
+sample-files/                 Mounted test fixture
+.github/workflows/ci.yml      Deterministic CI workflow
 ```
 
-```text
-Find files containing project, read the matching text files, and summarize them.
-```
+## Prerequisites
 
-This lane verifies model reasoning and tool selection, so it is intentionally a
-manual acceptance test rather than a deterministic CI assertion.
+Deterministic tests require:
 
-Test the model without MCP:
+- Docker Engine;
+- Docker Compose;
+- `curl`;
+- access to GitHub Container Registry for the initial LLMSim image pull.
+
+The optional real-model lane additionally requires:
+
+- Docker Compose 2.38 or later;
+- Docker Model Runner;
+- enough RAM for the selected model.
+
+No host Java, Maven, Python, Scala, sbt, Node, Goose, or LLMSim installation is
+required.
+
+## Initial setup and mounted files
 
 ```bash
-./scripts/local-chat.sh
-# or
-make local-chat
+cp .env.example .env
+./scripts/verify-environment.sh
 ```
 
-The default model is configured in `.env`:
+The bundled fixture contains three files and two directories. To inspect a
+different safe directory, edit `.env`:
 
 ```dotenv
-LOCAL_LLM_MODEL=ai/qwen2.5:3B-Q4_K_M
+FILES_HOST_DIR=/home/pramalin/some-test-directory
 ```
 
-## Adding an MCP tool
-
-See [`docs/adding-a-tool.md`](docs/adding-a-tool.md). The intended sequence is:
-
-1. Implement domain logic as an ordinary Java service.
-2. Unit-test the service without MCP.
-3. Add a thin MCP tool adapter.
-4. Extend the direct MCP smoke test.
-5. Add a focused LLMSim `ScriptSource` for orchestration behavior.
-6. Assert the LLMSim call journal and application result.
-7. Verify the same flow with a real local model.
+Avoid mounting your complete home directory in a test setup.
 
 ## Stopping and cleanup
 
@@ -344,15 +373,23 @@ These commands do not remove Docker Model Runner's downloaded model cache.
 |---|---|
 | `http://localhost:8080/mcp` | Spring MCP Streamable HTTP endpoint |
 | `http://localhost:8080/api/workspace/summary` | Non-MCP diagnostic endpoint |
-| `http://localhost:8089/v1/chat/completions` | LLMSim OpenAI-compatible chat API |
+| `http://localhost:8089/v1/chat/completions` | LLMSim OpenAI-compatible API |
 | `http://localhost:8089/v1/models` | LLMSim model-list compatibility endpoint |
-| `http://localhost:8089/_llmsim/status` | Quick captured-call count |
+| `http://localhost:8089/_llmsim/status` | Captured-call count and status |
 | `http://localhost:8089/_llmsim/calls` | Complete captured-call journal |
-| `http://localhost:8089/_llmsim/dashboard` | Aggregated script/journal metrics |
+| `http://localhost:8089/_llmsim/dashboard` | Aggregated script and journal metrics |
 | `http://localhost:8089/_llmsim/ui` | Minimal dashboard |
-| `http://localhost:8089/_llmsim/console` | Full Tyrian console |
+| `http://localhost:8089/_llmsim/console` | Full browser console |
+
+## Detailed documentation
+
+- [`docs/architecture.md`](docs/architecture.md) — boundaries and the two-lane design
+- [`docs/testing-strategy.md`](docs/testing-strategy.md) — what each test proves and does not prove
+- [`docs/llmsim.md`](docs/llmsim.md) — LLMSim image, script, journal, and console
+- [`docs/adding-a-tool.md`](docs/adding-a-tool.md) — adapting the pattern to a new tool
+- [`docs/github-repository.md`](docs/github-repository.md) — suggested GitHub description and topics
 
 ## Project references
 
-- LLMSim: `https://github.com/pramalin/llmsim`
-- Spring project: `https://github.com/pramalin/spring-ai-mcp`
+- LLMSim: https://github.com/pramalin/llmsim
+- Spring AI MCP example: https://github.com/pramalin/spring-ai-mcp
